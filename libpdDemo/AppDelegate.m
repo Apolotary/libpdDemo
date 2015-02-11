@@ -7,6 +7,7 @@
 //
 
 #import "AppDelegate.h"
+#import "PdModel.h"
 
 @interface AppDelegate ()
 
@@ -16,7 +17,11 @@
 
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
-    // Override point for customization after application launch.
+
+    // initializing pure data
+    PdModel *pdModel = [PdModel sharedInstance];
+    [pdModel openPatch:@"Pd-example1.pd" withPath:[[NSBundle mainBundle] bundlePath]];
+    
     return YES;
 }
 
