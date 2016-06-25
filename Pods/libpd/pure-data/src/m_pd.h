@@ -9,8 +9,8 @@ extern "C" {
 #endif
 
 #define PD_MAJOR_VERSION 0
-#define PD_MINOR_VERSION 45
-#define PD_BUGFIX_VERSION 4
+#define PD_MINOR_VERSION 47
+#define PD_BUGFIX_VERSION 0
 #define PD_TEST_VERSION ""
 extern int pd_compatibilitylevel;   /* e.g., 43 for pd 0.43 compatibility */
 
@@ -39,12 +39,15 @@ extern int pd_compatibilitylevel;   /* e.g., 43 for pd 0.43 compatibility */
 #define EXTERN extern
 #endif /* _WIN32 */
 
-    /* and depending on the compiler, hidden data structures are
-    declared differently: */
-#if defined( __GNUC__) || defined( __BORLANDC__ ) || defined( __MWERKS__ )
-#define EXTERN_STRUCT struct
-#else
+    /* On most c compilers, you can just say "struct foo;" to declare a
+    structure whose elements are defined elsewhere.  On MSVC, when compiling
+    C (but not C++) code, you have to say "extern struct foo;".  So we make
+    a stupid macro: */
+#if defined(_MSC_VER) && !defined(_LANGUAGE_C_PLUS_PLUS) \
+    && !defined(__cplusplus)
 #define EXTERN_STRUCT extern struct
+#else
+#define EXTERN_STRUCT struct
 #endif
 
 /* Define some attributes, specific to the compiler */
@@ -137,7 +140,7 @@ typedef struct _gstub
 typedef struct _gpointer           /* pointer to a gobj in a glist */
 {
     union
-    {   
+    {
         struct _scalar *gp_scalar;  /* scalar we're in (if glist) */
         union word *gp_w;           /* raw data (if array) */
     } gp_un;
@@ -165,7 +168,7 @@ typedef enum
     A_COMMA,
     A_DEFFLOAT,
     A_DEFSYM,
-    A_DOLLAR, 
+    A_DOLLAR,
     A_DOLLSYM,
     A_GIMME,
     A_CANT
@@ -247,7 +250,17 @@ typedef struct _text t_object;
 
 typedef void (*t_method)(void);
 typedef void *(*t_newmethod)( void);
+
+/* in ARM 64 a varargs prototype generates a different function call sequence
+from a fixed one, so in that special case we make a more restrictive
+definition for t_gotfn.  This will break some code in the "chaos" package
+in Pd extended.  (that code will run incorrectly anyhow so why not catch it
+at compile time anyhow.) */
+#if defined(__APPLE__) && defined(__aarch64__)
 typedef void (*t_gotfn)(void *x);
+#else
+typedef void (*t_gotfn)(void *x, ...);
+#endif
 
 /* ---------------- pre-defined objects and symbols --------------*/
 EXTERN t_pd pd_objectmaker;     /* factory for creating "object" boxes */
@@ -278,6 +291,7 @@ EXTERN void pd_vmess(t_pd *x, t_symbol *s, char *fmt, ...);
 using function lookup but circumventing type checking on arguments.  Only
 use for internal messaging protected by A_CANT so that the message can't
 be generated at patch level. */
+#define mess0(x, s) ((*getfn((x), (s)))((x)))
 typedef void (*t_gotfn1)(void *x, void *arg1);
 #define mess1(x, s, a) ((*(t_gotfn1)getfn((x), (s)))((x), (a)))
 typedef void (*t_gotfn2)(void *x, void *arg1, void *arg2);
@@ -431,6 +445,8 @@ EXTERN void canvas_makefilename(t_glist *c, char *file,
 EXTERN t_symbol *canvas_getdir(t_glist *x);
 EXTERN char sys_font[]; /* default typeface set in s_main.c */
 EXTERN char sys_fontweight[]; /* default font weight set in s_main.c */
+EXTERN int sys_zoomfontwidth(int fontsize, int zoom, int worstcase);
+EXTERN int sys_zoomfontheight(int fontsize, int zoom, int worstcase);
 EXTERN int sys_fontwidth(int fontsize);
 EXTERN int sys_fontheight(int fontsize);
 EXTERN void canvas_dataproperties(t_glist *x, t_scalar *sc, t_binbuf *b);
@@ -459,7 +475,7 @@ EXTERN t_parentwidgetbehavior *pd_getparentwidget(t_pd *x);
 
 EXTERN t_class *class_new(t_symbol *name, t_newmethod newmethod,
     t_method freemethod, size_t size, int flags, t_atomtype arg1, ...);
-EXTERN void class_addcreator(t_newmethod newmethod, t_symbol *s, 
+EXTERN void class_addcreator(t_newmethod newmethod, t_symbol *s,
     t_atomtype type1, ...);
 EXTERN void class_addmethod(t_class *c, t_method fn, t_symbol *sel,
     t_atomtype arg1, ...);
@@ -541,7 +557,7 @@ EXTERN int sys_close(int fd);
 EXTERN FILE *sys_fopen(const char *filename, const char *mode);
 EXTERN int sys_fclose(FILE *stream);
 
-/* ------------  threading ------------------- */ 
+/* ------------  threading ------------------- */
 EXTERN void sys_lock(void);
 EXTERN void sys_unlock(void);
 EXTERN int sys_trylock(void);
@@ -611,8 +627,8 @@ typedef struct _resample
 {
   int method;       /* up/downsampling method ID */
 
-  t_int downsample; /* downsampling factor */
-  t_int upsample;   /* upsampling factor */
+  int downsample; /* downsampling factor */
+  int upsample;   /* upsampling factor */
 
   t_sample *s_vec;   /* here we hold the resampled data */
   int      s_n;
@@ -641,7 +657,7 @@ EXTERN t_float dbtopow(t_float);
 
 EXTERN t_float q8_sqrt(t_float);
 EXTERN t_float q8_rsqrt(t_float);
-#ifndef N32     
+#ifndef N32
 EXTERN t_float qsqrt(t_float);  /* old names kept for extern compatibility */
 EXTERN t_float qrsqrt(t_float);
 #endif
@@ -709,36 +725,84 @@ defined, there is a "te_xpix" field in objects, not a "te_xpos" as before: */
 #ifndef _MSC_VER /* Microoft compiler can't handle "inline" function/macros */
 #if defined(__i386__) || defined(__x86_64__) || defined(__arm__)
 /* a test for NANs and denormals.  Should only be necessary on i386. */
-# if PD_FLOATSIZE == 32
-static inline int PD_BADFLOAT(t_sample f) {
-  t_sampleint_union u;
-  u.f=f;
-  return ((u.i & 0x7f800000)==0) || ((u.i&0x7f800000)==0x7f800000);
+#if PD_FLOATSIZE == 32
+
+typedef  union
+{
+    t_float f;
+    unsigned int ui;
+}t_bigorsmall32;
+
+static inline int PD_BADFLOAT(t_float f)  /* malformed float */
+{
+    t_bigorsmall32 pun;
+    pun.f = f;
+    pun.ui &= 0x7f800000;
+    return((pun.ui == 0) | (pun.ui == 0x7f800000));
 }
-/* more stringent test: anything not between 1e-19 and 1e19 in absolute val */
-static inline int PD_BIGORSMALL(t_sample f) {
-  t_sampleint_union u;
-  u.f=f;
-  return ((u.i & 0x60000000)==0) || ((u.i & 0x60000000)==0x60000000);
+
+static inline int PD_BIGORSMALL(t_float f)  /* exponent outside (-64,64) */
+{
+    t_bigorsmall32 pun;
+    pun.f = f;
+    return((pun.ui & 0x20000000) == ((pun.ui >> 1) & 0x20000000));
 }
-# else
-#  warning 64bit mode: BIGORSMALL not implemented yet
-#  define PD_BADFLOAT(f) 0
-#  define PD_BIGORSMALL(f) 0
-# endif
-#else
-# define PD_BADFLOAT(f) 0
-# define PD_BIGORSMALL(f) 0
+
+#elif PD_FLOATSIZE == 64
+
+typedef  union
+{
+    t_float f;
+    unsigned int ui[2];
+}t_bigorsmall64;
+
+static inline int PD_BADFLOAT(t_float f)  /* malformed double */
+{
+    t_bigorsmall64 pun;
+    pun.f = f;
+    pun.ui[1] &= 0x7ff00000;
+    return((pun.ui[1] == 0) | (pun.ui[1] == 0x7ff00000));
+}
+
+static inline int PD_BIGORSMALL(t_float f)  /* exponent outside (-512,512) */
+{
+    t_bigorsmall64 pun;
+    pun.f = f;
+    return((pun.ui[1] & 0x20000000) == ((pun.ui[1] >> 1) & 0x20000000));
+}
+
+#endif /* PD_FLOATSIZE */
+#else /* not INTEL or ARM */
+#define PD_BADFLOAT(f) 0
+#define PD_BIGORSMALL(f) 0
 #endif
+
 #else   /* _MSC_VER */
+#if PD_FLOATSIZE == 32
 #define PD_BADFLOAT(f) ((((*(unsigned int*)&(f))&0x7f800000)==0) || \
     (((*(unsigned int*)&(f))&0x7f800000)==0x7f800000))
 /* more stringent test: anything not between 1e-19 and 1e19 in absolute val */
 #define PD_BIGORSMALL(f) ((((*(unsigned int*)&(f))&0x60000000)==0) || \
     (((*(unsigned int*)&(f))&0x60000000)==0x60000000))
+#else   /* 64 bits... don't know what to do here */
+#define PD_BADFLOAT(f) (!(((f) >= 0) || ((f) <= 0)))
+#define PD_BIGORSMALL(f) ((f) > 1e150 || (f) <  -1e150 \
+    || (f) > -1e-150 && (f) < 1e-150 )
+#endif
 #endif /* _MSC_VER */
     /* get version number at run time */
 EXTERN void sys_getversion(int *major, int *minor, int *bugfix);
+
+EXTERN_STRUCT _pdinstance;
+#define t_pdinstance struct _pdinstance       /* m_imp.h */
+
+/* m_pd.c */
+
+EXTERN t_pdinstance *pdinstance_new( void);
+EXTERN void pd_setinstance(t_pdinstance *x);
+EXTERN void pdinstance_free(t_pdinstance *x);
+EXTERN t_canvas *pd_getcanvaslist(void);
+EXTERN int pd_getdspstate(void);
 
 #if defined(_LANGUAGE_C_PLUS_PLUS) || defined(__cplusplus)
 }

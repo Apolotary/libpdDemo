@@ -18,10 +18,12 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-#ifdef WIN32
-#include <malloc.h>
+#ifdef _WIN32
+# include <malloc.h> /* MSVC or mingw on windows */
+#elif defined(__linux__) || defined(__APPLE__)
+# include <alloca.h> /* linux, mac, mingw, cygwin */
 #else
-#include <alloca.h>
+# include <stdlib.h> /* BSDs for example */
 #endif
 
 #include "s_utf8.h"
@@ -144,11 +146,6 @@ int u8_wc_nbytes(uint32_t ch)
   if (ch < 0x800) return 2;
   if (ch < 0x10000) return 3;
   if (ch < 0x200000) return 4;
-#if UTF8_SUPPORT_FULL_UCS4
-  /*-- moo: support full UCS-4 range? --*/
-  if (ch < 0x4000000) return 5;
-  if (ch < 0x7fffffffUL) return 6;
-#endif
   return 0; /*-- bad input --*/
 }
 
@@ -283,16 +280,3 @@ void u8_dec(char *s, int *i)
            isutf(s[--(*i)]) || --(*i));
 }
 
-/*-- moo --*/
-void u8_inc_ptr(char **sp)
-{
-  (void)(isutf(*(++(*sp))) || isutf(*(++(*sp))) ||
-         isutf(*(++(*sp))) || ++(*sp));
-}
-
-/*-- moo --*/
-void u8_dec_ptr(char **sp)
-{
-  (void)(isutf(*(--(*sp))) || isutf(*(--(*sp))) ||
-         isutf(*(--(*sp))) || --(*sp));
-}

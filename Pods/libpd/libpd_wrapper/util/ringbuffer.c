@@ -3,12 +3,31 @@
  *
  *  For information on usage and redistribution, and for a DISCLAIMER OF ALL
  *  WARRANTIES, see the file, "LICENSE.txt," in this distribution.
+ *
+ * See https://github.com/libpd/libpd/wiki for documentation
+ *
  */
 
 #include "ringbuffer.h"
 
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+
+#ifdef __APPLE__ // apple atomics
+# include <libkern/OSAtomic.h>
+# define SYNC_FETCH(ptr) OSAtomicOr32Barrier(0, (volatile uint32_t *)ptr)
+# define SYNC_COMPARE_AND_SWAP(ptr, oldval, newval) \
+         OSAtomicCompareAndSwap32Barrier(oldval, newval, ptr) 
+#elif defined(_MSC_VER) // win api atomics
+# define SYNC_FETCH(ptr) InterlockedOr(ptr, 0)
+# define SYNC_COMPARE_AND_SWAP(ptr, oldval, newval) \
+         InterlockedCompareExchange(ptr, oldval, newval)
+#else // gcc atomics
+# define SYNC_FETCH(ptr) __sync_fetch_and_or(ptr, 0)
+# define SYNC_COMPARE_AND_SWAP(ptr, oldval, newval) \
+         __sync_val_compare_and_swap(ptr, oldval, newval)
+#endif
 
 ring_buffer *rb_create(int size) {
   if (size & 0xff) return NULL;  // size must be a multiple of 256
@@ -35,8 +54,8 @@ int rb_available_to_write(ring_buffer *buffer) {
     // Note: The largest possible result is buffer->size - 1 because
     // we adopt the convention that read_idx == write_idx means that the
     // buffer is empty.
-    int read_idx = __sync_fetch_and_or(&(buffer->read_idx), 0);
-    int write_idx = __sync_fetch_and_or(&(buffer->write_idx), 0);
+    int read_idx = SYNC_FETCH(&(buffer->read_idx));
+    int write_idx = SYNC_FETCH(&(buffer->write_idx));
     return (buffer->size + read_idx - write_idx - 1) % buffer->size;
   } else {
     return 0;
@@ -45,27 +64,38 @@ int rb_available_to_write(ring_buffer *buffer) {
 
 int rb_available_to_read(ring_buffer *buffer) {
   if (buffer) {
-    int read_idx = __sync_fetch_and_or(&(buffer->read_idx), 0);
-    int write_idx = __sync_fetch_and_or(&(buffer->write_idx), 0);
+    int read_idx = SYNC_FETCH(&(buffer->read_idx));
+    int write_idx = SYNC_FETCH(&(buffer->write_idx));
     return (buffer->size + write_idx - read_idx) % buffer->size;
   } else {
     return 0;
   }
 }
 
-int rb_write_to_buffer(ring_buffer *buffer, const char *src, int len) {
-  if (len == 0) return 0;
-  if (!buffer || len < 0 || len > rb_available_to_write(buffer)) return -1;
+int rb_write_to_buffer(ring_buffer *buffer, int n, ...) {
+  if (!buffer) return -1;
   int write_idx = buffer->write_idx;  // No need for sync in writer thread.
-  if (write_idx + len <= buffer->size) {
-    memcpy(buffer->buf_ptr + write_idx, src, len);
-  } else {
-    int d = buffer->size - write_idx;
-    memcpy(buffer->buf_ptr + write_idx, src, d);
-    memcpy(buffer->buf_ptr, src + d, len - d);
+  int available = rb_available_to_write(buffer);
+  va_list args;
+  va_start(args, n);
+  int i;
+  for (i = 0; i < n; ++i) {
+    const char* src = va_arg(args, const char*);
+    int len = va_arg(args, int);
+    available -= len;
+    if (len < 0 || available < 0) return -1;
+    if (write_idx + len <= buffer->size) {
+      memcpy(buffer->buf_ptr + write_idx, src, len);
+    } else {
+      int d = buffer->size - write_idx;
+      memcpy(buffer->buf_ptr + write_idx, src, d);
+      memcpy(buffer->buf_ptr, src + d, len - d);
+    }
+    write_idx = (write_idx + len) % buffer->size;
   }
-  __sync_val_compare_and_swap(&(buffer->write_idx), buffer->write_idx,
-       (write_idx + len) % buffer->size);  // Includes memory barrier.
+  va_end(args);
+  SYNC_COMPARE_AND_SWAP(&(buffer->write_idx), buffer->write_idx,
+      write_idx);  // Includes memory barrier.
   return 0; 
 }
 
@@ -83,7 +113,7 @@ int rb_read_from_buffer(ring_buffer *buffer, char *dest, int len) {
     memcpy(dest, buffer->buf_ptr + read_idx, d);
     memcpy(dest + d, buffer->buf_ptr, len - d);
   }
-  __sync_val_compare_and_swap(&(buffer->read_idx), buffer->read_idx,
+  SYNC_COMPARE_AND_SWAP(&(buffer->read_idx), buffer->read_idx,
        (read_idx + len) % buffer->size);  // Includes memory barrier.
   return 0; 
 }

@@ -35,18 +35,19 @@ typedef struct _sigdelwrite
 #define XTRASAMPS 4
 #define SAMPBLK 4
 
-static void sigdelwrite_updatesr (t_sigdelwrite *x, t_float sr) /* added by Mathieu Bouchard */
+static void sigdelwrite_updatesr(t_sigdelwrite *x, t_float sr) /* added by Mathieu Bouchard */
 {
     int nsamps = x->x_deltime * sr * (t_float)(0.001f);
     if (nsamps < 1) nsamps = 1;
     nsamps += ((- nsamps) & (SAMPBLK - 1));
     nsamps += DEFDELVS;
-    if (x->x_cspace.c_n != nsamps) {
-      x->x_cspace.c_vec = (t_sample *)resizebytes(x->x_cspace.c_vec,
-        (x->x_cspace.c_n + XTRASAMPS) * sizeof(t_sample),
-        (         nsamps + XTRASAMPS) * sizeof(t_sample));
-      x->x_cspace.c_n = nsamps;
-      x->x_cspace.c_phase = XTRASAMPS;
+    if (x->x_cspace.c_n != nsamps)
+    {
+        x->x_cspace.c_vec = (t_sample *)resizebytes(x->x_cspace.c_vec,
+            (x->x_cspace.c_n + XTRASAMPS) * sizeof(t_sample),
+            (nsamps + XTRASAMPS) * sizeof(t_sample));
+        x->x_cspace.c_n = nsamps;
+        x->x_cspace.c_phase = XTRASAMPS;
     }
 }
 
@@ -108,7 +109,7 @@ static t_int *sigdelwrite_perform(t_int *w)
             phase -= nsamps;
         }
     }
-    c->c_phase = phase; 
+    c->c_phase = phase;
     return (w+4);
 }
 
@@ -129,12 +130,12 @@ static void sigdelwrite_free(t_sigdelwrite *x)
 
 static void sigdelwrite_setup(void)
 {
-    sigdelwrite_class = class_new(gensym("delwrite~"), 
+    sigdelwrite_class = class_new(gensym("delwrite~"),
         (t_newmethod)sigdelwrite_new, (t_method)sigdelwrite_free,
         sizeof(t_sigdelwrite), 0, A_DEFSYM, A_DEFFLOAT, 0);
     CLASS_MAINSIGNALIN(sigdelwrite_class, t_sigdelwrite, x_f);
     class_addmethod(sigdelwrite_class, (t_method)sigdelwrite_dsp,
-        gensym("dsp"), 0);
+        gensym("dsp"), A_CANT, 0);
 }
 
 /* ----------------------------- delread~ ----------------------------- */
@@ -177,8 +178,8 @@ static void sigdelread_float(t_sigdelread *x, t_float f)
         x->x_delsamps = (int)(0.5 + x->x_sr * x->x_deltime)
             + x->x_n - x->x_zerodel;
         if (x->x_delsamps < x->x_n) x->x_delsamps = x->x_n;
-        else if (x->x_delsamps > delwriter->x_cspace.c_n - DEFDELVS)
-            x->x_delsamps = delwriter->x_cspace.c_n - DEFDELVS;
+        else if (x->x_delsamps > delwriter->x_cspace.c_n)
+            x->x_delsamps = delwriter->x_cspace.c_n;
     }
 }
 
@@ -227,7 +228,7 @@ static void sigdelread_setup(void)
         (t_newmethod)sigdelread_new, 0,
         sizeof(t_sigdelread), 0, A_DEFSYM, A_DEFFLOAT, 0);
     class_addmethod(sigdelread_class, (t_method)sigdelread_dsp,
-        gensym("dsp"), 0);
+        gensym("dsp"), A_CANT, 0);
     class_addfloat(sigdelread_class, (t_method)sigdelread_float);
 }
 
@@ -247,7 +248,6 @@ typedef struct _sigvd
 static void *sigvd_new(t_symbol *s)
 {
     t_sigvd *x = (t_sigvd *)pd_new(sigvd_class);
-    if (!*s->s_name) s = gensym("vd~");
     x->x_sym = s;
     x->x_sr = 1;
     x->x_zerodel = 0;
@@ -265,7 +265,7 @@ static t_int *sigvd_perform(t_int *w)
     int n = (int)(w[5]);
 
     int nsamps = ctl->c_n;
-    t_sample limit = nsamps - n - 1;
+    t_sample limit = nsamps - n;
     t_sample fn = n-1;
     t_sample *vp = ctl->c_vec, *bp, *wp = vp + ctl->c_phase;
     t_sample zerodel = x->x_zerodel;
@@ -312,14 +312,16 @@ static void sigvd_dsp(t_sigvd *x, t_signal **sp)
             sp[0]->s_vec, sp[1]->s_vec,
                 &delwriter->x_cspace, x, sp[0]->s_n);
     }
-    else error("vd~: %s: no such delwrite~",x->x_sym->s_name);
+    else if (*x->x_sym->s_name)
+        error("vd~: %s: no such delwrite~",x->x_sym->s_name);
 }
 
 static void sigvd_setup(void)
 {
-    sigvd_class = class_new(gensym("vd~"), (t_newmethod)sigvd_new, 0,
+    sigvd_class = class_new(gensym("delread4~"), (t_newmethod)sigvd_new, 0,
         sizeof(t_sigvd), 0, A_DEFSYM, 0);
-    class_addmethod(sigvd_class, (t_method)sigvd_dsp, gensym("dsp"), 0);
+    class_addcreator((t_newmethod)sigvd_new, gensym("vd~"), A_DEFSYM, 0);
+    class_addmethod(sigvd_class, (t_method)sigvd_dsp, gensym("dsp"), A_CANT, 0);
     CLASS_MAINSIGNALIN(sigvd_class, t_sigvd, x_f);
 }
 

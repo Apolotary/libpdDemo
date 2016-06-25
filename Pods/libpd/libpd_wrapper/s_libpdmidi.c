@@ -48,7 +48,7 @@ void outmidi_polyaftertouch(int port, int channel, int pitch, int value) {
 
 void outmidi_byte(int port, int value) {
   if (libpd_midibytehook)
-    libpd_midibytehook(CLAMP12BIT(port - 1), CLAMP8BIT(value));
+    libpd_midibytehook(CLAMP12BIT(port), CLAMP8BIT(value));
 }
 
 // The rest is not relevant to libpd.
@@ -66,4 +66,6 @@ void sys_setmiditimediff(double inbuftime, double outbuftime) {}
 void glob_midi_setapi(void *dummy, t_floatarg f) {}
 void glob_midi_properties(t_pd *dummy, t_floatarg flongform) {}
 void glob_midi_dialog(t_pd *dummy, t_symbol *s, int argc, t_atom *argv) {}
+int sys_mididevnametonumber(int output, const char *name) { return 0; }
+void sys_mididevnumbertoname(int output, int devno, char *name, int namesize) {}
 
